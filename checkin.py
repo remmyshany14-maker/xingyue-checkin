@@ -1,85 +1,36 @@
-import os
 import requests
-from datetime import datetime
+import os
+import json
 
-BASE_URL = "https://c.xingyuexiezuo.com/api/v1"
+TOKEN = os.environ.get("TOKEN")
 
-TOKEN = os.environ["SECRET_TOKEN"]
+headers = {
+    "Authorization": f"Bearer {TOKEN}",
+    "Device": "web",
+    "Platform": "web",
+    "Bundle": "web",
+    "Version": "5.1.0",
+    "Content-Type": "application/json"
+}
 
-def send_email(subject, content):
-    # 使用 GitHub Actions 环境变量发送邮件
-    import smtplib
-    from email.mime.text import MIMEText
+# 1. 签到
+res = requests.post(
+    "https://c.xingyuexiezuo.com/api/v1/forum/checkin",
+    headers=headers,
+    json={"data": "RUTjr2nDiRda1I+NCO3FqQ=="}
+)
 
-    smtp_server = "smtp.qq.com"
-    smtp_port = 587
+data = res.json()
+print("签到结果：", data)
 
-    user = os.environ["EMAIL_USER"]
-    password = os.environ["EMAIL_PASS"]
-    to = os.environ["EMAIL_TO"]
+# 2. 判断状态
+status = data.get("status", "")
 
-    msg = MIMEText(content, "plain", "utf-8")
-    msg["Subject"] = subject
-    msg["From"] = user
-    msg["To"] = to
+if "成功" in status or data.get("code") == 200:
+    result = "签到成功"
+elif "已签到" in status:
+    result = "今日已签到"
+else:
+    result = "签到失败"
 
-    try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
-        server.login(user, password)
-        server.sendmail(user, [to], msg.as_string())
-        server.quit()
-    except Exception as e:
-        print("邮件发送失败:", e)
-
-
-def checkin_status():
-    url = f"{BASE_URL}/forum/checkin/status"
-    headers = {
-        "Authorization": f"Bearer {TOKEN}"
-    }
-    return requests.get(url, headers=headers).json()
-
-
-def checkin():
-    url = f"{BASE_URL}/forum/checkin"
-    headers = {
-        "Authorization": f"Bearer {TOKEN}",
-        "Device": "web",
-        "Platform": "web",
-        "Bundle": "web",
-        "Version": "5.1.0",
-        "Content-Type": "application/json"
-    }
-    data = {"data": "RUTjr2nDiRda1I+NCO3FqQ=="}
-
-    return requests.post(url, json=data, headers=headers).json()
-
-
-def main():
-    status = checkin_status()
-
-    print("状态：", status)
-
-    if status.get("code") == 200 and status.get("status") == "Success":
-        result = checkin()
-    else:
-        result = status
-
-    print("签到结果：", result)
-
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    subject = "星月写作签到结果"
-    content = f"""
-时间：{now}
-
-返回结果：
-{result}
-"""
-
-    send_email(subject, content)
-
-
-if __name__ == "__main__":
-    main()
+print("最终状态：", result)
