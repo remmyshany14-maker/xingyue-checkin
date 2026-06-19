@@ -157,6 +157,8 @@ def run():
         # ✔ 再取状态（真正奖励来源）
         st = status(token)
 
+        print("RAW STATUS:", json.dumps(st, ensure_ascii=False, indent=2))
+
         print("CHECKIN:", ck)
         print("STATUS:", st)
 
