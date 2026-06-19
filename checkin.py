@@ -3,10 +3,12 @@ import time
 import random
 import json
 import re
+import base64
 import requests
 import smtplib
 from datetime import datetime
 
+from Crypto.Cipher import AES
 from email.mime.text import MIMEText
 from email.header import Header
 
@@ -17,7 +19,6 @@ from email.header import Header
 BASE_URL = "https://c.xingyuexiezuo.com/api/v1"
 
 
-# ✔ 支持 中文逗号 / 英文逗号 / 换行
 TOKENS = [
     t.strip()
     for t in re.split(r"[,\n，]+", os.getenv("SECRET_TOKENS", ""))
@@ -31,41 +32,26 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 
 
 # ======================
-# reward parser（安全版）
+# AES decrypt（关键修复）
 # ======================
-def parse_reward(data):
-    if not isinstance(data, dict):
-        return 0, 0
-
-    daily = data.get("daily_info", {}) or {}
-    remaining = data.get("remaining_words", 0) or 0
-
-    today_get = daily.get("daily_free", 0) or 0
-
-    return today_get, remaining
-
-
-# ======================
-# email
-# ======================
-def send_email(title, content):
-    if not (EMAIL_USER and EMAIL_PASS and EMAIL_TO):
-        print("[EMAIL] missing config")
-        return
-
-    msg = MIMEText(content, "plain", "utf-8")
-    msg["Subject"] = Header(title, "utf-8")
-    msg["From"] = EMAIL_USER
-    msg["To"] = EMAIL_TO
-
+def decrypt_encoded(encoded: str):
     try:
-        server = smtplib.SMTP_SSL("smtp.qq.com", 465)
-        server.login(EMAIL_USER, EMAIL_PASS)
-        server.sendmail(EMAIL_USER, [EMAIL_TO], msg.as_bytes())
-        server.quit()
-        print("[EMAIL] sent")
+        key = b"chloefuckityoall"
+        iv = b"9311019310287172"
+
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+
+        raw = base64.b64decode(encoded)
+        decrypted = cipher.decrypt(raw)
+
+        pad = decrypted[-1]
+        decrypted = decrypted[:-pad]
+
+        return json.loads(decrypted.decode("utf-8"))
+
     except Exception as e:
-        print("[EMAIL ERROR]", e)
+        print("[DECRYPT ERROR]", e)
+        return {}
 
 
 # ======================
@@ -97,25 +83,60 @@ def checkin(token):
 
 
 # ======================
-# ✔ retry
+# reward parser（核心修复）
 # ======================
-def checkin_retry(token, retries=3):
-    last = None
+def parse_reward(result):
+    data = result.get("data", {})
 
-    for i in range(retries):
-        last = checkin(token)
+    encoded = data.get("encoded")
 
-        if last.get("code") in [200, 5150]:
-            return last
+    if encoded:
+        decoded = decrypt_encoded(encoded)
+        user_info = decoded.get("userInfo", {})
 
-        print(f"[RETRY] {token[:6]} attempt {i+1}")
-        time.sleep(2 + i)
+        daily = user_info.get("daily_info", {})
+        remaining = user_info.get("remaining_words", 0)
 
-    return last
+        today = daily.get("daily_free", 0)
+
+        return today, remaining
+
+    # fallback（防止接口变动）
+    user_info = data.get("userInfo", {}) if isinstance(data, dict) else {}
+
+    daily = user_info.get("daily_info", {})
+    remaining = user_info.get("remaining_words", 0)
+
+    today = daily.get("daily_free", 0)
+
+    return today, remaining
 
 
 # ======================
-# MAIN
+# email
+# ======================
+def send_email(title, content):
+    if not (EMAIL_USER and EMAIL_PASS and EMAIL_TO):
+        print("[EMAIL] missing config")
+        return
+
+    msg = MIMEText(content, "plain", "utf-8")
+    msg["Subject"] = Header(title, "utf-8")
+    msg["From"] = EMAIL_USER
+    msg["To"] = EMAIL_TO
+
+    try:
+        server = smtplib.SMTP_SSL("smtp.qq.com", 465)
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.sendmail(EMAIL_USER, [EMAIL_TO], msg.as_bytes())
+        server.quit()
+        print("[EMAIL] sent")
+    except Exception as e:
+        print("[EMAIL ERROR]", e)
+
+
+# ======================
+# main
 # ======================
 def run():
     print("===== START CHECKIN =====")
@@ -128,8 +149,7 @@ def run():
     for token in TOKENS:
         time.sleep(random.uniform(2, 5))
 
-        result = checkin_retry(token)
-
+        result = checkin(token)
         print("CHECKIN:", result)
 
         code = result.get("code")
@@ -141,12 +161,7 @@ def run():
         else:
             state = "FAILED"
 
-        # ======================
-        # ✔ 关键修复：不再用 status
-        # ======================
-        user_info = result.get("data", {}) or {}
-
-        today, remaining = parse_reward(user_info)
+        today, remaining = parse_reward(result)
 
         total_today += today
         total_remaining += remaining
@@ -181,16 +196,16 @@ def run():
     print(report)
 
     # ======================
-    # ✔ 邮件标题优化
+    # email title
     # ======================
     success = sum(1 for r in results if r["state"] == "SUCCESS")
 
     if success == len(results):
-        title = "✅ 签到全部成功"
+        title = "签到全部成功"
     elif success == 0:
-        title = "❌ 签到全部失败"
+        title = "签到全部失败"
     else:
-        title = f"⚠️ 部分成功（{success}/{len(results)}）"
+        title = f"部分成功 {success}/{len(results)}"
 
     send_email(title, report)
 
