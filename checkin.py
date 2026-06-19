@@ -27,9 +27,9 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 
 
 # ======================
-# request
+# REQUEST (带重试)
 # ======================
-def request_post(url, token, payload=None):
+def request_post(url, token, payload=None, retry=3):
     headers = {
         "Authorization": f"Bearer {token}",
         "Device": "web",
@@ -39,15 +39,25 @@ def request_post(url, token, payload=None):
         "Content-Type": "application/json"
     }
 
-    try:
-        r = requests.post(url, headers=headers, json=payload or {}, timeout=15)
-        return r.json()
-    except Exception as e:
-        return {"code": -1, "error": str(e)}
+    for i in range(retry):
+        try:
+            r = requests.post(
+                url,
+                headers=headers,
+                json=payload or {},
+                timeout=15
+            )
+            return r.json()
+
+        except Exception as e:
+            print(f"[WARN] retry {i+1}: {e}")
+            time.sleep(2 + i)
+
+    return {"code": -1, "error": "timeout_failed"}
 
 
 # ======================
-# checkin
+# CHECKIN
 # ======================
 def checkin(token):
     return request_post(
@@ -58,14 +68,19 @@ def checkin(token):
 
 
 # ======================
-# 状态判断修复（重点）
+# 状态判断（修复核心）
 # ======================
 def parse_state(result):
-    code = result.get("code")
+    if not isinstance(result, dict):
+        return "UNKNOWN"
 
+    if "error" in result:
+        return "UNKNOWN"
+
+    code = result.get("code")
     status_text = result.get("status", "")
 
-    # ✔ 已签到（关键修复点）
+    # ✔ 已签到
     if code == 5150 or "已签到" in status_text:
         return "ALREADY"
 
@@ -73,12 +88,12 @@ def parse_state(result):
     if code == 200:
         return "SUCCESS"
 
-    # ❌ 真实失败
+    # ❌ 其他失败
     return "FAILED"
 
 
 # ======================
-# email
+# EMAIL
 # ======================
 def send_email(title, content):
     if not (EMAIL_USER and EMAIL_PASS and EMAIL_TO):
@@ -93,7 +108,7 @@ def send_email(title, content):
     try:
         server = smtplib.SMTP_SSL("smtp.qq.com", 465)
         server.login(EMAIL_USER, EMAIL_PASS)
-        server.sendmail(EMAIL_USER, [EMAIL_TO], msg.as_bytes())
+        server.sendmail(EMAIL_USER, [EMAIL_TO], msg.as_string())
         server.quit()
         print("[EMAIL] sent")
     except Exception as e:
@@ -106,29 +121,31 @@ def send_email(title, content):
 def run():
     print("===== START CHECKIN =====")
 
-    results = []
-
     success = 0
     already = 0
     failed = 0
+    unknown = 0
+
+    results = []
 
     for token in TOKENS:
 
-        # ✔ 轻微随机延迟
+        # ✔ 防止风控轻延迟
         time.sleep(random.uniform(1.5, 4.5))
 
         result = checkin(token)
+        state = parse_state(result)
 
         print("CHECKIN:", result)
-
-        state = parse_state(result)
 
         if state == "SUCCESS":
             success += 1
         elif state == "ALREADY":
             already += 1
-        else:
+        elif state == "FAILED":
             failed += 1
+        else:
+            unknown += 1
 
         results.append({
             "token": token[:10],
@@ -152,21 +169,22 @@ def run():
         f"成功: {success}\n"
         f"已签到: {already}\n"
         f"失败: {failed}\n"
+        f"异常: {unknown}\n"
     )
 
     print(report)
 
     # ======================
-    # 邮件标题逻辑（你要的）
+    # EMAIL TITLE LOGIC
     # ======================
     total = len(TOKENS)
 
     if success == total:
-        title = "✅ 签到成功（全部完成）"
+        title = "✅ 全部账号签到成功"
     elif success + already == total:
-        title = "🟡 签到完成（全部已签到）"
+        title = "🟡 全部账号已签到"
     elif success > 0:
-        title = "🟠 签到部分成功"
+        title = "🟠 部分账号签到成功"
     else:
         title = "❌ 签到失败"
 
