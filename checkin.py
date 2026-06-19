@@ -174,6 +174,20 @@ def run():
 
         res, state, reason = retry_checkin(token)
 
+        checked_today = set()
+
+        def is_duplicate(uid):
+            if uid in checked_today:
+               return True
+            checked_today.add(uid)
+            return False
+
+         info = parse_token_info(token)
+
+         if is_duplicate(info["uid"]):
+             print(f"[SKIP] {info['name']} already processed")
+             continue
+
 
         results.append({
             "name": token[:10],
