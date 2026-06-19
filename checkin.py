@@ -2,9 +2,33 @@ import os
 import time
 import random
 import requests
-import smtplib
-from email.mime.text import MIMEText
-from datetime import datetime
+
+def send_email(title, content):
+    if not (EMAIL_USER and EMAIL_PASS and EMAIL_TO):
+        return
+
+    msg = MIMEMultipart()
+    msg["Subject"] = title
+    msg["From"] = EMAIL_USER
+    msg["To"] = EMAIL_TO
+
+    msg.attach(MIMEText(content, "plain", "utf-8"))
+
+    # 加图
+    for img in ["success_rate.png"]:
+        if os.path.exists(img):
+            with open(img, "rb") as f:
+                img_data = MIMEImage(f.read())
+                img_data.add_header("Content-Disposition", "attachment", filename=img)
+                msg.attach(img_data)
+
+    try:
+        server = smtplib.SMTP_SSL("smtp.qq.com", 465)
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.sendmail(EMAIL_USER, EMAIL_TO, msg.as_string())
+        server.quit()
+    except Exception as e:
+        print("[EMAIL ERROR]", e)
 
 BASE_URL = "https://c.xingyuexiezuo.com/api/v1"
 
@@ -100,6 +124,8 @@ def run():
             "state": state
         })
 
+        add_log(state)
+
     # ========= report =========
     summary = "\n".join([f"{r['token']} => {r['state']}" for r in results])
 
@@ -114,3 +140,8 @@ def run():
 
 if __name__ == "__main__":
     run()
+
+
+from dashboard import plot_success_rate
+
+plot_success_rate()
