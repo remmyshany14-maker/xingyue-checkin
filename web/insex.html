@@ -1,1 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>签到Dashboard</title>
+</head>
 
+<body>
+<h2>📊 星月签到可视化</h2>
+
+<pre id="data"></pre>
+
+<script>
+fetch("../data/report.json")
+.then(r => r.json())
+.then(d => {
+    document.getElementById("data").innerText =
+        JSON.stringify(d, null, 2);
+});
+</script>
+
+</body>
+</html>
