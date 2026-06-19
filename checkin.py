@@ -15,11 +15,16 @@ from email.header import Header
 BASE_URL = "https://c.xingyuexiezuo.com/api/v1"
 SITE_NAME = "星月"
 
+
+# ======================
+# TOKEN加载
+# ======================
 TOKENS = [
     t.strip()
     for t in re.split(r"[,\n，]+", os.getenv("SECRET_TOKENS", ""))
     if t.strip()
 ]
+
 
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
@@ -27,16 +32,37 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 
 
 # ======================
-# ⭐ 核心升级：真实用户名获取
+# TOKEN自愈管理器（核心）
+# ======================
+class TokenManager:
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.index = 0
+        self.bad_tokens = set()
+
+    def get_token(self):
+        if not self.tokens:
+            return None
+
+        # 找可用token
+        for _ in range(len(self.tokens)):
+            token = self.tokens[self.index % len(self.tokens)]
+            self.index += 1
+
+            if token not in self.bad_tokens:
+                return token
+
+        return None
+
+    def mark_bad(self, token):
+        print(f"[TOKEN BAD] {token[:10]}")
+        self.bad_tokens.add(token)
+
+
+# ======================
+# 获取用户名（稳定版）
 # ======================
 def get_user_name(token):
-    """
-    优先：/user/info
-    兜底：JWT
-    最后：token截断
-    """
-
-    # 1️⃣ 优先接口获取真实昵称
     try:
         r = requests.get(
             f"{BASE_URL}/user/info",
@@ -53,42 +79,21 @@ def get_user_name(token):
         data = r.json()
         user = data.get("data") or {}
 
-        name = (
+        return (
             user.get("nickname")
             or user.get("username")
             or user.get("name")
-        )
-
-        if name:
-            return name
-
-    except:
-        pass
-
-    # 2️⃣ JWT fallback
-    try:
-        part = token.split(".")[1]
-        part += "=" * (-len(part) % 4)
-
-        obj = json.loads(base64.urlsafe_b64decode(part).decode())
-
-        return (
-            obj.get("nickname")
-            or obj.get("name")
-            or f"UID-{obj.get('uid')}"
+            or f"TOKEN-{token[:6]}"
         )
 
     except:
-        pass
-
-    # 3️⃣ 最终兜底
-    return f"TOKEN-{token[:6]}"
+        return f"TOKEN-{token[:6]}"
 
 
 # ======================
-# request
+# 自愈请求（重试+退避）
 # ======================
-def request_post(url, token, payload=None):
+def request_with_retry(url, token, payload=None, max_retry=3):
     headers = {
         "Authorization": f"Bearer {token}",
         "Device": "web",
@@ -98,23 +103,26 @@ def request_post(url, token, payload=None):
         "Content-Type": "application/json"
     }
 
-    try:
-        r = requests.post(url, headers=headers, json=payload or {}, timeout=15)
-        return r.json()
-    except Exception as e:
-        return {"code": -1, "error": str(e)}
+    for i in range(max_retry):
+        try:
+            r = requests.post(
+                url,
+                headers=headers,
+                json=payload or {},
+                timeout=10
+            )
+            return r.json()
 
+        except Exception as e:
+            wait = 2 ** i + random.uniform(0, 1)
+            print(f"[RETRY {i+1}] {e} wait={wait:.1f}s")
+            time.sleep(wait)
 
-def checkin(token):
-    return request_post(
-        f"{BASE_URL}/forum/checkin",
-        token,
-        {"data": "RUTjr2nDiRda1I+NCO3FqQ=="}
-    )
+    return {"code": -1, "error": "network_failed"}
 
 
 # ======================
-# 状态标准化
+# 状态解析
 # ======================
 def parse_state(res):
     if not isinstance(res, dict):
@@ -123,7 +131,7 @@ def parse_state(res):
     if "error" in res:
         return "ERROR", res["error"]
 
-    code = res.get("code")
+    code = res.get("code", 0)
     status = str(res.get("status", ""))
 
     if code == 5150 or "已签到" in status:
@@ -136,7 +144,7 @@ def parse_state(res):
 
 
 # ======================
-# 邮件发送
+# 邮件
 # ======================
 def send_email(title, html):
     msg = MIMEText(html, "html", "utf-8")
@@ -151,47 +159,31 @@ def send_email(title, html):
 
 
 # ======================
-# HTML
+# HTML报告（重点排序）
 # ======================
-def build_email(results, failed_list, summary_text):
+def build_email(results, failed, summary):
     html = f"""
     <html>
     <body style="font-family:Arial;background:#f5f5f5;padding:20px">
 
     <div style="background:#fff;padding:20px;border-radius:10px">
 
-    <h1>🚀 {SITE_NAME}签到报告</h1>
-    <h2>{summary_text}</h2>
+    <h1>🚀 {SITE_NAME} 自愈签到报告</h1>
+    <h2>{summary}</h2>
     <p>{datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
 
-    <h3>📌 账号状态</h3>
-    <table border="1" cellpadding="8" width="100%">
-        <tr>
-            <th>账号</th>
-            <th>状态</th>
-        </tr>
+    <h3>📌 签到结果</h3>
+    <ul>
     """
 
-    color_map = {
-        "CHECKED": "green",
-        "NOT_CHECKED": "red",
-        "ERROR": "orange"
-    }
-
     for r in results:
-        html += f"""
-        <tr>
-            <td>{r['name']}</td>
-            <td style="color:{color_map[r['state']]};">{r['state_cn']}</td>
-        </tr>
-        """
+        html += f"<li>{r['name']} → {r['state']}</li>"
 
-    html += "</table>"
+    html += "</ul>"
 
-    # 失败原因
-    if failed_list:
-        html += "<h3>⚠️ 失败原因</h3><ul>"
-        for f in failed_list:
+    if failed:
+        html += "<h3>⚠️ 异常详情</h3><ul>"
+        for f in failed:
             html += f"<li>{f['name']} → {f['reason']}</li>"
         html += "</ul>"
 
@@ -200,66 +192,72 @@ def build_email(results, failed_list, summary_text):
 
 
 # ======================
-# MAIN
+# 主流程（自愈核心）
 # ======================
 def run():
-    print("===== START =====")
+    print("===== SELF HEAL START =====")
+
+    manager = TokenManager(TOKENS)
 
     results = []
-    failed_list = []
+    failed = []
 
     checked = 0
-    not_checked = 0
     error = 0
 
-    for token in TOKENS:
+    for _ in range(len(TOKENS)):
 
-        time.sleep(random.uniform(1.5, 3.5))
+        token = manager.get_token()
+        if not token:
+            break
 
-        res = checkin(token)
+        res = request_with_retry(
+            f"{BASE_URL}/forum/checkin",
+            token,
+            {"data": "RUTjr2nDiRda1I+NCO3FqQ=="}
+        )
+
+        # token失效
+        if res.get("code") in [-1, 401, 403]:
+            manager.mark_bad(token)
+            continue
+
         state, reason = parse_state(res)
-
-        # ⭐ 这里改了：不再用旧 parse_token_info
         name = get_user_name(token)
 
         if state == "CHECKED":
-            state_cn = "已签到"
             checked += 1
+            state_cn = "已签到"
 
         elif state == "NOT_CHECKED":
             state_cn = "未签到"
-            not_checked += 1
 
         else:
             state_cn = "异常"
             error += 1
-            failed_list.append({
+            failed.append({
                 "name": name,
                 "reason": reason
             })
 
         results.append({
             "name": name,
-            "state": state,
-            "state_cn": state_cn
+            "state": state_cn
         })
 
-    total = len(TOKENS)
+        time.sleep(random.uniform(1.5, 3.5))
 
-    summary_text = f"已签到 {checked} | 未签到 {not_checked} | 异常 {error}"
+    summary = f"已签到 {checked} | 异常 {error}"
 
-    if checked == total:
-        title = f"{SITE_NAME}｜全部账号已签到"
-    elif checked + not_checked == total:
-        title = f"{SITE_NAME}｜部分账号未签到"
+    if error == 0:
+        title = f"{SITE_NAME}｜全部账号自愈签到成功"
     else:
-        title = f"{SITE_NAME}｜签到异常"
+        title = f"{SITE_NAME}｜自愈签到完成（含异常）"
 
-    html = build_email(results, failed_list, summary_text)
-
+    html = build_email(results, failed, summary)
     send_email(title, html)
 
-    print(summary_text)
+    print(summary)
 
 
 if __name__ == "__main__":
