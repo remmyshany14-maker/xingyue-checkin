@@ -66,6 +66,23 @@ def checkin(token):
 # ======================
 # 状态解析
 # ======================
+
+def retry_checkin(token, max_retry=3):
+    last_error = None
+
+    for i in range(max_retry):
+        res = checkin(token)
+
+        # 成功或已签到直接返回
+        state, reason = parse_state(res)
+        if state in ["CHECKED", "NOT_CHECKED"]:
+            return res, state, reason
+
+        last_error = reason
+        time.sleep(2 + i)  # 递增等待
+
+    return {"code": -1, "error": str(last_error)}, "ERROR", last_error
+
 def parse_state(res):
     if not isinstance(res, dict):
         return "异常", "响应错误"
@@ -155,9 +172,8 @@ def run():
 
     for token in TOKENS:
 
-        res = checkin(token)
+        res, state, reason = retry_checkin(token)
 
-        state, reason = parse_state(res)
 
         results.append({
             "name": token[:10],
