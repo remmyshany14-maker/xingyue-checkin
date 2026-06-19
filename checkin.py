@@ -3,6 +3,7 @@ import time
 import random
 import json
 import base64
+import re
 import requests
 import smtplib
 from datetime import datetime
@@ -20,10 +21,10 @@ from Crypto.Util.Padding import unpad
 BASE_URL = "https://c.xingyuexiezuo.com/api/v1"
 
 
-# ✔ 修复 token 污染（关键）
+# ✔ 修复：支持中文逗号 / 换行 / 英文逗号
 TOKENS = [
-    t.strip().replace("\n", "").replace("\r", "").replace("，", ",")
-    for t in os.getenv("SECRET_TOKENS", "").split(",")
+    t.strip()
+    for t in re.split(r"[,\n，]+", os.getenv("SECRET_TOKENS", ""))
     if t.strip()
 ]
 
@@ -62,7 +63,7 @@ def parse_reward(user_info):
 
 
 # ======================
-# EMAIL（彻底修复编码问题）
+# EMAIL
 # ======================
 def send_email(title, content):
     if not (EMAIL_USER and EMAIL_PASS and EMAIL_TO):
@@ -78,7 +79,6 @@ def send_email(title, content):
         server = smtplib.SMTP_SSL("smtp.qq.com", 465)
         server.login(EMAIL_USER, EMAIL_PASS)
 
-        # ✔ 关键修复：避免 latin-1
         server.sendmail(
             EMAIL_USER,
             [EMAIL_TO],
@@ -110,7 +110,6 @@ def request_post(url, token, payload=None):
     try:
         r = requests.post(url, headers=headers, json=payload or {}, timeout=15)
         return r.json()
-
     except Exception as e:
         return {"code": -1, "error": str(e)}
 
@@ -128,14 +127,26 @@ def checkin(token):
 
 
 # ======================
+# ✔ 重试签到（关键）
+# ======================
+def checkin_with_retry(token, retries=3):
+    for i in range(retries):
+        result = checkin(token)
+
+        if result.get("code") in [200, 5150]:
+            return result
+
+        print(f"[RETRY] {token[:6]} attempt {i+1}")
+        time.sleep(2 + i)
+
+    return result
+
+
+# ======================
 # MAIN
 # ======================
 def run():
     print("===== START CHECKIN =====")
-
-    print("TOKENS DEBUG:")
-    for t in TOKENS:
-        print(repr(t))
 
     results = []
     total_today = 0
@@ -145,14 +156,13 @@ def run():
         time.sleep(random.uniform(2, 6))
 
         status = check_status(token)
-        result = checkin(token)
+        result = checkin_with_retry(token)
 
         print("STATUS:", status)
         print("CHECKIN:", result)
 
-        # ✔ 请求失败直接跳过
         if result.get("code") == -1:
-            print("[SKIP] bad request")
+            print("[SKIP] request failed")
             continue
 
         state = "FAILED"
@@ -162,11 +172,11 @@ def run():
             state = "ALREADY"
 
         # ======================
-        # decode encoded
+        # decode reward
         # ======================
         user_info = {}
-
         encoded = status.get("data", {}).get("encoded")
+
         if encoded:
             user_info = decrypt(encoded)
 
@@ -204,10 +214,19 @@ def run():
 
     print(summary)
 
-    send_email(
-        f"签到日报 {datetime.now().strftime('%Y-%m-%d')}",
-        summary
-    )
+    # ======================
+    # ✔ 邮件标题智能化
+    # ======================
+    success_count = sum(1 for r in results if r["state"] == "SUCCESS")
+
+    if success_count == len(results):
+        title = "✅ 签到全部成功"
+    elif success_count == 0:
+        title = "❌ 签到全部失败"
+    else:
+        title = f"⚠️ 部分成功（{success_count}/{len(results)}）"
+
+    send_email(title, summary)
 
 
 if __name__ == "__main__":
