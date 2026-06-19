@@ -19,7 +19,14 @@ from Crypto.Util.Padding import unpad
 # ======================
 BASE_URL = "https://c.xingyuexiezuo.com/api/v1"
 
-TOKENS = [t.strip() for t in os.getenv("SECRET_TOKENS", "").split(",") if t.strip()]
+
+# ✔ 修复 token 污染（关键）
+TOKENS = [
+    t.strip().replace("\n", "").replace("\r", "").replace("，", ",")
+    for t in os.getenv("SECRET_TOKENS", "").split(",")
+    if t.strip()
+]
+
 
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
@@ -55,7 +62,7 @@ def parse_reward(user_info):
 
 
 # ======================
-# EMAIL（已修复编码问题）
+# EMAIL（彻底修复编码问题）
 # ======================
 def send_email(title, content):
     if not (EMAIL_USER and EMAIL_PASS and EMAIL_TO):
@@ -71,7 +78,7 @@ def send_email(title, content):
         server = smtplib.SMTP_SSL("smtp.qq.com", 465)
         server.login(EMAIL_USER, EMAIL_PASS)
 
-        # ✔ 修复 latin-1 编码问题（关键）
+        # ✔ 关键修复：避免 latin-1
         server.sendmail(
             EMAIL_USER,
             [EMAIL_TO],
@@ -89,6 +96,8 @@ def send_email(title, content):
 # request
 # ======================
 def request_post(url, token, payload=None):
+    token = str(token).strip()
+
     headers = {
         "Authorization": f"Bearer {token}",
         "Device": "web",
@@ -101,6 +110,7 @@ def request_post(url, token, payload=None):
     try:
         r = requests.post(url, headers=headers, json=payload or {}, timeout=15)
         return r.json()
+
     except Exception as e:
         return {"code": -1, "error": str(e)}
 
@@ -123,6 +133,10 @@ def checkin(token):
 def run():
     print("===== START CHECKIN =====")
 
+    print("TOKENS DEBUG:")
+    for t in TOKENS:
+        print(repr(t))
+
     results = []
     total_today = 0
     total_remaining = 0
@@ -136,9 +150,9 @@ def run():
         print("STATUS:", status)
         print("CHECKIN:", result)
 
-        # ✔ 请求失败保护（关键）
+        # ✔ 请求失败直接跳过
         if result.get("code") == -1:
-            print("[SKIP] request failed")
+            print("[SKIP] bad request")
             continue
 
         state = "FAILED"
@@ -151,8 +165,8 @@ def run():
         # decode encoded
         # ======================
         user_info = {}
-        encoded = status.get("data", {}).get("encoded")
 
+        encoded = status.get("data", {}).get("encoded")
         if encoded:
             user_info = decrypt(encoded)
 
