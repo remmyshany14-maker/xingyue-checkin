@@ -1,125 +1,33 @@
 import os
-import time
-import random
-import requests
-from datetime import datetime
 
-BASE_URL = "https://c.xingyuexiezuo.com/api/v1"
+TOKEN_FILE = "tokens.txt"
 
-TOKENS = [t.strip() for t in os.getenv("SECRET_TOKENS", "").split(",") if t.strip()]
-
-# ========= token 状态池 =========
-token_state = {
-    t: {
-        "fail": 0,
-        "status": "OK"   # OK / DEAD
-    } for t in TOKENS
-}
+def load_tokens():
+    with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+        return [i.strip() for i in f.readlines() if i.strip()]
 
 
-# ========= delay =========
-def sleep_random(a=2, b=6):
-    time.sleep(random.uniform(a, b))
+def save_tokens(tokens):
+    with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(tokens))
 
 
-# ========= request =========
-def request_post(url, token, payload=None):
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Device": "web",
-        "Platform": "web",
-        "Bundle": "web",
-        "Version": "5.1.0",
-        "Content-Type": "application/json"
-    }
+def replace_token(bad_token):
+    tokens = load_tokens()
 
-    try:
-        r = requests.post(url, headers=headers, json=payload or {}, timeout=10)
-        return r.json()
-    except Exception as e:
-        return {"code": -1, "error": str(e)}
+    print(f"[REMOVE] {bad_token[:10]}")
 
+    if bad_token in tokens:
+        tokens.remove(bad_token)
 
-# ========= status =========
-def check_status(token):
-    return request_post(f"{BASE_URL}/forum/checkin/status", token)
+    # 👉 从备用池补一个（如果有）
+    if len(tokens) == 0:
+        print("[ERROR] no backup token available")
+        return None
 
+    new_token = tokens[0]   # 简单策略：顺序替换
 
-# ========= checkin =========
-def checkin(token):
-    return request_post(
-        f"{BASE_URL}/forum/checkin",
-        token,
-        {"data": "RUTjr2nDiRda1I+NCO3FqQ=="}
-    )
+    save_tokens(tokens)
 
-
-# ========= token 更新逻辑 =========
-def update_token_state(token, success: bool):
-    state = token_state[token]
-
-    if success:
-        state["fail"] = 0
-        state["status"] = "OK"
-    else:
-        state["fail"] += 1
-        if state["fail"] >= 3:
-            state["status"] = "DEAD"
-
-
-# ========= 获取可用 token =========
-def get_active_tokens():
-    return [t for t in TOKENS if token_state[t]["status"] != "DEAD"]
-
-
-# ========= 主流程 =========
-def run():
-    print("===== START =====")
-
-    results = []
-
-    for token in TOKENS:
-
-        # DEAD token 仍然尝试“复活”
-        if token_state[token]["status"] == "DEAD":
-            print(f"[SKIP DEAD] try revive {token[:10]}...")
-            continue
-
-        sleep_random(2, 5)
-
-        status = check_status(token)
-        result = checkin(token)
-
-        print("[status]", status)
-        print("[checkin]", result)
-
-        # ========= 判断成功 =========
-        if result.get("code") == 200:
-            update_token_state(token, True)
-            state = "SUCCESS"
-
-        elif result.get("code") == 5150:
-            update_token_state(token, True)
-            state = "ALREADY"
-
-        else:
-            update_token_state(token, False)
-            state = "FAILED"
-
-        results.append({
-            "token": token[:10],
-            "state": state,
-            "fail_count": token_state[token]["fail"]
-        })
-
-    print("\n===== REPORT =====")
-    for r in results:
-        print(r)
-
-    print("\nTOKEN STATE:")
-    for k, v in token_state.items():
-        print(k[:10], v)
-
-
-if __name__ == "__main__":
-    run()
+    print(f"[REPLACE] -> {new_token[:10]}")
+    return new_token
