@@ -30,7 +30,7 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 
 
 # ======================
-# AES 解密
+# AES decrypt
 # ======================
 def decrypt_encoded(encoded: str):
     try:
@@ -78,23 +78,40 @@ def checkin(token):
     )
 
 
+def status(token):
+    return request_post(
+        f"{BASE_URL}/forum/checkin/status",
+        token
+    )
+
+
 # ======================
-# reward parse
+# ✔ 核心修复（奖励解析）
 # ======================
-def parse_reward(result):
-    data = result.get("data", {}) or {}
+def parse_reward(status_result):
+    data = status_result.get("data", {}) or {}
 
     encoded = data.get("encoded")
-    if encoded:
-        decoded = decrypt_encoded(encoded)
-        user_info = decoded.get("userInfo", {})
+    if not encoded:
+        return 0, 0
 
-        today = user_info.get("daily_info", {}).get("daily_free", 0)
-        remaining = user_info.get("remaining_words", 0)
+    decoded = decrypt_encoded(encoded)
 
-        return today, remaining
+    # ✔ 双层兼容（关键修复点）
+    user_info = (
+        decoded.get("userInfo")
+        or decoded.get("data", {}).get("userInfo", {})
+    )
 
-    return 0, 0
+    if not user_info:
+        return 0, 0
+
+    daily = user_info.get("daily_info", {})
+    today = daily.get("daily_free", 0)
+
+    remaining = user_info.get("remaining_words", 0)
+
+    return today, remaining
 
 
 # ======================
@@ -131,15 +148,19 @@ def run():
 
     for token in TOKENS:
 
-        # ======================
-        # ✔ ② 就是这里（核心）
-        # ======================
+        # ✔ 防风控：轻微随机延迟
         time.sleep(random.uniform(1.5, 4.5))
 
-        result = checkin(token)
-        print("CHECKIN:", result)
+        # ✔ 先执行签到
+        ck = checkin(token)
 
-        code = result.get("code")
+        # ✔ 再取状态（真正奖励来源）
+        st = status(token)
+
+        print("CHECKIN:", ck)
+        print("STATUS:", st)
+
+        code = ck.get("code")
 
         if code == 200:
             state = "SUCCESS"
@@ -148,7 +169,7 @@ def run():
         else:
             state = "FAILED"
 
-        today, remaining = parse_reward(result)
+        today, remaining = parse_reward(st)
 
         total_today += today
         total_remaining += remaining
