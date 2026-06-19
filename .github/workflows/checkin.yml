@@ -33,3 +33,9 @@ jobs:
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: python checkin.py
+
+      - name: Run checkin
+        run: python checkin.py
+
+      - name: Upload dashboard data
+        run: echo "dashboard updated"
