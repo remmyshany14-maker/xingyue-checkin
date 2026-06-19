@@ -2,7 +2,7 @@ name: daily-checkin
 
 on:
   schedule:
-    - cron: "0 0 * * *"  # UTC 0点 = 北京时间 8点
+    - cron: "0 0 * * *"  # 默认触发（后面我们用随机延迟）
   workflow_dispatch:
 
 jobs:
@@ -11,15 +11,23 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Random sleep (anti-detection)
+        run: |
+          import random, time
+          t = random.randint(10, 3600)  # 10秒~1小时随机延迟
+          print(f"sleep {t}s")
+          time.sleep(t)
+        shell: python
 
       - name: Run checkin
         env:
