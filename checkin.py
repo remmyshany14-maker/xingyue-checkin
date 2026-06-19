@@ -6,7 +6,9 @@ import base64
 import requests
 import smtplib
 from datetime import datetime
+
 from email.mime.text import MIMEText
+from email.header import Header
 
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
@@ -25,7 +27,7 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 
 
 # ======================
-# AES 解密（关键）
+# AES 解密
 # ======================
 KEY = b"chloefuckityoall"
 IV = b"9311019310287172"
@@ -53,7 +55,7 @@ def parse_reward(user_info):
 
 
 # ======================
-# email
+# EMAIL（已修复编码问题）
 # ======================
 def send_email(title, content):
     if not (EMAIL_USER and EMAIL_PASS and EMAIL_TO):
@@ -61,16 +63,24 @@ def send_email(title, content):
         return
 
     msg = MIMEText(content, "plain", "utf-8")
-    msg["Subject"] = title
+    msg["Subject"] = Header(title, "utf-8")
     msg["From"] = EMAIL_USER
     msg["To"] = EMAIL_TO
 
     try:
         server = smtplib.SMTP_SSL("smtp.qq.com", 465)
         server.login(EMAIL_USER, EMAIL_PASS)
-        server.sendmail(EMAIL_USER, EMAIL_TO, msg.as_string())
+
+        # ✔ 修复 latin-1 编码问题（关键）
+        server.sendmail(
+            EMAIL_USER,
+            [EMAIL_TO],
+            msg.as_bytes()
+        )
+
         server.quit()
         print("[EMAIL] sent")
+
     except Exception as e:
         print("[EMAIL ERROR]", e)
 
@@ -108,7 +118,7 @@ def checkin(token):
 
 
 # ======================
-# main
+# MAIN
 # ======================
 def run():
     print("===== START CHECKIN =====")
@@ -126,19 +136,23 @@ def run():
         print("STATUS:", status)
         print("CHECKIN:", result)
 
-        state = "FAILED"
+        # ✔ 请求失败保护（关键）
+        if result.get("code") == -1:
+            print("[SKIP] request failed")
+            continue
 
+        state = "FAILED"
         if result.get("code") == 200:
             state = "SUCCESS"
         elif result.get("code") == 5150:
             state = "ALREADY"
 
         # ======================
-        # 解密 encoded（关键修复）
+        # decode encoded
         # ======================
         user_info = {}
-
         encoded = status.get("data", {}).get("encoded")
+
         if encoded:
             user_info = decrypt(encoded)
 
@@ -168,7 +182,11 @@ def run():
             "-------------------\n"
         )
 
-    summary += f"\n====================\n总计获得: {total_today}\n总剩余: {total_remaining}"
+    summary += (
+        f"\n====================\n"
+        f"总计获得: {total_today}\n"
+        f"总剩余: {total_remaining}"
+    )
 
     print(summary)
 
