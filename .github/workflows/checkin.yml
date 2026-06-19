@@ -21,8 +21,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run checkin
+      - name: Run python checkin.py
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
         run: python checkin.py
+        
         env:
           SECRET_TOKEN: ${{ secrets.SECRET_TOKEN }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
