@@ -18,12 +18,14 @@ jobs:
 
       - run: pip install requests
 
-      # ⭐ 加随机延迟启动（关键）
-      - name: Random startup delay
+      - name: Random delay
         run: |
-          python -c "import random,time; t=random.randint(10,300); print('sleep',t); time.sleep(t)"
+          python -c "import random,time; time.sleep(random.randint(10,300))"
 
       - name: Run checkin
         env:
           SECRET_TOKENS: ${{ secrets.SECRET_TOKENS }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: python checkin.py
