@@ -82,17 +82,27 @@ def parse_state(res):
 # ======================
 # 邮件
 # ======================
+
 def send_email(title, html):
-    msg = MIMEText(html, "html", "utf-8")
-    msg["Subject"] = Header(title, "utf-8")
-    msg["From"] = EMAIL_USER
-    msg["To"] = EMAIL_TO
+    try:
+        msg = MIMEText(html, "html", "utf-8")
+        msg["Subject"] = Header(title, "utf-8")
+        msg["From"] = EMAIL_USER
+        msg["To"] = EMAIL_TO
 
-    server = smtplib.SMTP_SSL("smtp.qq.com", 465)
-    server.login(EMAIL_USER, EMAIL_PASS)
-    server.sendmail(EMAIL_USER, [EMAIL_TO], msg.as_bytes())
-    server.quit()
+        server = smtplib.SMTP_SSL("smtp.qq.com", 465, timeout=30)
 
+        server.ehlo()
+        server.login(EMAIL_USER, EMAIL_PASS)
+
+        server.sendmail(EMAIL_USER, [EMAIL_TO], msg.as_string())
+
+        server.quit()
+
+        print("[EMAIL] sent")
+
+    except Exception as e:
+        print("[EMAIL ERROR]", repr(e))
 
 # ======================
 # 可视化数据保存（3.0核心）
