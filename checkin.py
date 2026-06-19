@@ -1,14 +1,19 @@
 import os
 import time
 import random
+import json
+import base64
 import requests
-from datetime import datetime
 import smtplib
+from datetime import datetime
 from email.mime.text import MIMEText
+
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
 
 
 # ======================
-# config
+# CONFIG
 # ======================
 BASE_URL = "https://c.xingyuexiezuo.com/api/v1"
 
@@ -20,14 +25,30 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 
 
 # ======================
+# AES 解密（关键）
+# ======================
+KEY = b"chloefuckityoall"
+IV = b"9311019310287172"
+
+
+def decrypt(encoded: str):
+    try:
+        cipher = AES.new(KEY, AES.MODE_CBC, IV)
+        raw = base64.b64decode(encoded)
+        decrypted = unpad(cipher.decrypt(raw), 16)
+        return json.loads(decrypted.decode("utf-8"))
+    except Exception as e:
+        print("[DECRYPT ERROR]", e)
+        return {}
+
+
+# ======================
 # reward parser
 # ======================
 def parse_reward(user_info):
     daily = user_info.get("daily_info", {})
     remaining = user_info.get("remaining_words", 0)
-
     today_get = daily.get("daily_free", 0)
-
     return today_get, remaining
 
 
@@ -112,8 +133,14 @@ def run():
         elif result.get("code") == 5150:
             state = "ALREADY"
 
-        # ===== reward parse =====
-        user_info = status.get("data", {}).get("userInfo", {}) or {}
+        # ======================
+        # 解密 encoded（关键修复）
+        # ======================
+        user_info = {}
+
+        encoded = status.get("data", {}).get("encoded")
+        if encoded:
+            user_info = decrypt(encoded)
 
         today_get, remaining = parse_reward(user_info)
 
@@ -128,7 +155,7 @@ def run():
         })
 
     # ======================
-    # report
+    # REPORT
     # ======================
     summary = "签到日报\n\n"
 
