@@ -1,3 +1,11 @@
+def parse_reward(user_info):
+    daily = user_info.get("daily_info", {})
+    remaining = user_info.get("remaining_words", 0)
+
+    today_get = daily.get("daily_free", 0)
+
+    return today_get, remaining
+
 import os
 import time
 import random
@@ -107,7 +115,16 @@ def run():
         time.sleep(random.uniform(2, 6))
 
         status = check_status(token)
-        result = checkin(token)
+       user_info = res.get("data", {}).get("userInfo", {})
+       today_get, remaining = parse_reward(user_info)
+
+       result_list.append({
+           "token": token[:10],
+           "today": today_get,
+           "remaining": remaining
+       })
+
+        
 
         print("STATUS:", status)
         print("CHECKIN:", result)
