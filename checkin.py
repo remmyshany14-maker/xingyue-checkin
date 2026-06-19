@@ -15,9 +15,11 @@ from email.header import Header
 # ======================
 BASE_URL = "https://c.xingyuexiezuo.com/api/v1"
 
+RAW_TOKENS = os.getenv("SECRET_TOKENS", "")
+
 TOKENS = [
     t.strip()
-    for t in re.split(r"[,\n，]+", os.getenv("SECRET_TOKENS", ""))
+    for t in re.split(r"[,\n，]+", RAW_TOKENS)
     if t.strip()
 ]
 
@@ -27,7 +29,25 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 
 
 # ======================
-# REQUEST (带重试)
+# TOKEN NAME（可选：从token推UID）
+# ======================
+def get_token_name(token):
+    try:
+        import base64, json
+
+        part = token.split(".")[1]
+        pad = "=" * (-len(part) % 4)
+        data = base64.urlsafe_b64decode(part + pad)
+        payload = json.loads(data.decode())
+
+        return f"UID-{payload.get('uid', 'unknown')}"
+
+    except:
+        return f"TOKEN-{token[:6]}"
+
+
+# ======================
+# REQUEST (带重试机制)
 # ======================
 def request_post(url, token, payload=None, retry=3):
     headers = {
@@ -39,36 +59,42 @@ def request_post(url, token, payload=None, retry=3):
         "Content-Type": "application/json"
     }
 
+    last_err = None
+
     for i in range(retry):
         try:
-            r = requests.post(
-                url,
-                headers=headers,
-                json=payload or {},
-                timeout=15
-            )
+            r = requests.post(url, headers=headers, json=payload or {}, timeout=15)
             return r.json()
 
         except Exception as e:
-            print(f"[WARN] retry {i+1}: {e}")
+            last_err = str(e)
             time.sleep(2 + i)
 
-    return {"code": -1, "error": "timeout_failed"}
+    return {"code": -1, "error": last_err or "unknown"}
 
 
 # ======================
-# CHECKIN
+# CHECKIN（带签到级重试）
 # ======================
 def checkin(token):
-    return request_post(
-        f"{BASE_URL}/forum/checkin",
-        token,
-        {"data": "RUTjr2nDiRda1I+NCO3FqQ=="}
-    )
+    for i in range(2):  # ✔ 签到级重试
+        result = request_post(
+            f"{BASE_URL}/forum/checkin",
+            token,
+            {"data": "RUTjr2nDiRda1I+NCO3FqQ=="}
+        )
+
+        # ✔ 成功或已签到就不重试
+        if result.get("code") in [200, 5150] or "已签到" in str(result):
+            return result
+
+        time.sleep(1 + i)
+
+    return result
 
 
 # ======================
-# 状态判断（修复核心）
+# STATE PARSER
 # ======================
 def parse_state(result):
     if not isinstance(result, dict):
@@ -80,15 +106,12 @@ def parse_state(result):
     code = result.get("code")
     status_text = result.get("status", "")
 
-    # ✔ 已签到
     if code == 5150 or "已签到" in status_text:
         return "ALREADY"
 
-    # ✔ 成功签到
     if code == 200:
         return "SUCCESS"
 
-    # ❌ 其他失败
     return "FAILED"
 
 
@@ -100,7 +123,7 @@ def send_email(title, content):
         print("[EMAIL] missing config")
         return
 
-    msg = MIMEText(content, "plain", "utf-8")
+    msg = MIMEText(content, "html", "utf-8")
     msg["Subject"] = Header(title, "utf-8")
     msg["From"] = EMAIL_USER
     msg["To"] = EMAIL_TO
@@ -116,25 +139,71 @@ def send_email(title, content):
 
 
 # ======================
+# HTML REPORT（美化重点）
+# ======================
+def build_report(results, summary):
+    html = f"""
+    <html>
+    <body style="font-family:Arial">
+
+    <h2>📌 签到日报 {datetime.now().strftime('%Y-%m-%d')}</h2>
+
+    <table border="1" cellpadding="8" cellspacing="0">
+        <tr>
+            <th>账号</th>
+            <th>状态</th>
+        </tr>
+    """
+
+    for r in results:
+        color = {
+            "SUCCESS": "green",
+            "ALREADY": "blue",
+            "FAILED": "red",
+            "UNKNOWN": "orange"
+        }.get(r["state"], "black")
+
+        html += f"""
+        <tr>
+            <td>{r['name']}</td>
+            <td style="color:{color}">{r['state']}</td>
+        </tr>
+        """
+
+    html += f"""
+    </table>
+
+    <h3>📊 汇总</h3>
+    <p>{summary}</p>
+
+    </body>
+    </html>
+    """
+
+    return html
+
+
+# ======================
 # MAIN
 # ======================
 def run():
     print("===== START CHECKIN =====")
+
+    results = []
 
     success = 0
     already = 0
     failed = 0
     unknown = 0
 
-    results = []
-
     for token in TOKENS:
 
-        # ✔ 防止风控轻延迟
         time.sleep(random.uniform(1.5, 4.5))
 
         result = checkin(token)
         state = parse_state(result)
+
+        name = get_token_name(token)
 
         print("CHECKIN:", result)
 
@@ -148,35 +217,20 @@ def run():
             unknown += 1
 
         results.append({
-            "token": token[:10],
+            "name": name,
             "state": state
         })
 
-    # ======================
-    # REPORT
-    # ======================
-    report = "签到日报\n\n"
-
-    for r in results:
-        report += (
-            f"账号: {r['token']}\n"
-            f"状态: {r['state']}\n"
-            "-------------------\n"
-        )
-
-    report += (
-        f"\n====================\n"
-        f"成功: {success}\n"
-        f"已签到: {already}\n"
-        f"失败: {failed}\n"
-        f"异常: {unknown}\n"
+    summary = (
+        f"成功: {success} | "
+        f"已签到: {already} | "
+        f"失败: {failed} | "
+        f"异常: {unknown}"
     )
 
-    print(report)
+    print(summary)
 
-    # ======================
-    # EMAIL TITLE LOGIC
-    # ======================
+    # ✔ 邮件标题
     total = len(TOKENS)
 
     if success == total:
@@ -184,11 +238,12 @@ def run():
     elif success + already == total:
         title = "🟡 全部账号已签到"
     elif success > 0:
-        title = "🟠 部分账号签到成功"
+        title = "🟠 部分账号成功"
     else:
         title = "❌ 签到失败"
 
-    send_email(title, report)
+    html = build_report(results, summary)
+    send_email(title, html)
 
 
 if __name__ == "__main__":
