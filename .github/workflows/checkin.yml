@@ -2,7 +2,7 @@ name: daily-checkin
 
 on:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 0 * * *"   # UTC 0点（北京时间 8点）
   workflow_dispatch:
 
 jobs:
@@ -10,17 +10,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
 
-      - uses: actions/setup-python@v4
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      - run: pip install requests
+      - name: Install dependencies
+        run: pip install requests
 
+      # 随机延迟（防固定时间特征）
       - name: Random delay
         run: |
-          python -c "import random,time; time.sleep(random.randint(10,300))"
+          python -c "import random,time; t=random.randint(10,300); print('sleep', t); time.sleep(t)"
 
       - name: Run checkin
         env:
