@@ -19,7 +19,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests matplotlib
 
       # 随机延迟（防固定时间特征）
       - name: Random delay
