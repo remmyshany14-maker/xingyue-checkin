@@ -1,30 +1,26 @@
 import os
+import re
 import time
 import random
-import re
-import base64
-import json
 import requests
 import smtplib
+import json
 from datetime import datetime
-
 from email.mime.text import MIMEText
 from email.header import Header
 
 
+# ======================
+# CONFIG
+# ======================
 BASE_URL = "https://c.xingyuexiezuo.com/api/v1"
 SITE_NAME = "星月"
 
-
-# ======================
-# TOKEN加载
-# ======================
 TOKENS = [
     t.strip()
     for t in re.split(r"[,\n，]+", os.getenv("SECRET_TOKENS", ""))
     if t.strip()
 ]
-
 
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
@@ -32,93 +28,39 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 
 
 # ======================
-# TOKEN自愈管理器（核心）
+# REQUEST（自动重试）
 # ======================
-class TokenManager:
-    def __init__(self, tokens):
-        self.tokens = tokens
-        self.index = 0
-        self.bad_tokens = set()
-
-    def get_token(self):
-        if not self.tokens:
-            return None
-
-        # 找可用token
-        for _ in range(len(self.tokens)):
-            token = self.tokens[self.index % len(self.tokens)]
-            self.index += 1
-
-            if token not in self.bad_tokens:
-                return token
-
-        return None
-
-    def mark_bad(self, token):
-        print(f"[TOKEN BAD] {token[:10]}")
-        self.bad_tokens.add(token)
-
-
-# ======================
-# 获取用户名（稳定版）
-# ======================
-def get_user_name(token):
-    try:
-        r = requests.get(
-            f"{BASE_URL}/user/info",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Device": "web",
-                "Platform": "web",
-                "Bundle": "web",
-                "Version": "5.1.0",
-            },
-            timeout=10
-        )
-
-        data = r.json()
-        user = data.get("data") or {}
-
-        return (
-            user.get("nickname")
-            or user.get("username")
-            or user.get("name")
-            or f"TOKEN-{token[:6]}"
-        )
-
-    except:
-        return f"TOKEN-{token[:6]}"
-
-
-# ======================
-# 自愈请求（重试+退避）
-# ======================
-def request_with_retry(url, token, payload=None, max_retry=3):
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Device": "web",
-        "Platform": "web",
-        "Bundle": "web",
-        "Version": "5.1.0",
-        "Content-Type": "application/json"
-    }
-
-    for i in range(max_retry):
+def request_post(url, token, data=None, retry=3):
+    for i in range(retry):
         try:
             r = requests.post(
                 url,
-                headers=headers,
-                json=payload or {},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Device": "web",
+                    "Platform": "web",
+                    "Version": "5.1.0"
+                },
+                json=data or {},
                 timeout=10
             )
             return r.json()
 
         except Exception as e:
-            wait = 2 ** i + random.uniform(0, 1)
-            print(f"[RETRY {i+1}] {e} wait={wait:.1f}s")
-            time.sleep(wait)
+            time.sleep(2 ** i + random.uniform(0.5, 1.5))
 
     return {"code": -1, "error": "network_failed"}
+
+
+# ======================
+# 签到
+# ======================
+def checkin(token):
+    return request_post(
+        f"{BASE_URL}/forum/checkin",
+        token,
+        {"data": "RUTjr2nDiRda1I+NCO3FqQ=="}
+    )
 
 
 # ======================
@@ -126,21 +68,15 @@ def request_with_retry(url, token, payload=None, max_retry=3):
 # ======================
 def parse_state(res):
     if not isinstance(res, dict):
-        return "ERROR", "响应异常"
+        return "异常", "响应错误"
 
     if "error" in res:
-        return "ERROR", res["error"]
+        return "异常", res["error"]
 
-    code = res.get("code", 0)
-    status = str(res.get("status", ""))
+    if res.get("code") == 5150 or "已签到" in str(res.get("status", "")):
+        return "已签到", None
 
-    if code == 5150 or "已签到" in status:
-        return "CHECKED", None
-
-    if code == 200:
-        return "CHECKED", None
-
-    return "NOT_CHECKED", status or "未知错误"
+    return "未签到", res.get("status", "未知")
 
 
 # ======================
@@ -159,105 +95,79 @@ def send_email(title, html):
 
 
 # ======================
-# HTML报告（重点排序）
+# 可视化数据保存（3.0核心）
 # ======================
-def build_email(results, failed, summary):
+def save_dashboard(results):
+    os.makedirs("data", exist_ok=True)
+
+    data = {
+        "time": datetime.now().isoformat(),
+        "results": results
+    }
+
+    with open("data/report.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ======================
+# 邮件内容
+# ======================
+def build_email(results):
+    success = sum(1 for r in results if r["state"] == "已签到")
+
+    status = "全部成功" if success == len(results) else "部分失败"
+
     html = f"""
-    <html>
-    <body style="font-family:Arial;background:#f5f5f5;padding:20px">
-
-    <div style="background:#fff;padding:20px;border-radius:10px">
-
-    <h1>🚀 {SITE_NAME} 自愈签到报告</h1>
-    <h2>{summary}</h2>
+    <h1>🚀 {SITE_NAME}签到报告（3.0）</h1>
+    <h2>状态：{status}</h2>
     <p>{datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
 
-    <h3>📌 签到结果</h3>
+    <h3>📌 账号结果</h3>
     <ul>
     """
 
     for r in results:
         html += f"<li>{r['name']} → {r['state']}</li>"
 
-    html += "</ul>"
+    html += "</ul></body>"
 
-    if failed:
-        html += "<h3>⚠️ 异常详情</h3><ul>"
-        for f in failed:
-            html += f"<li>{f['name']} → {f['reason']}</li>"
-        html += "</ul>"
-
-    html += "</div></body></html>"
     return html
 
 
 # ======================
-# 主流程（自愈核心）
+# 主流程
 # ======================
 def run():
-    print("===== SELF HEAL START =====")
 
-    manager = TokenManager(TOKENS)
+    print("===== START 3.0 =====")
 
     results = []
-    failed = []
 
-    checked = 0
-    error = 0
+    for token in TOKENS:
 
-    for _ in range(len(TOKENS)):
-
-        token = manager.get_token()
-        if not token:
-            break
-
-        res = request_with_retry(
-            f"{BASE_URL}/forum/checkin",
-            token,
-            {"data": "RUTjr2nDiRda1I+NCO3FqQ=="}
-        )
-
-        # token失效
-        if res.get("code") in [-1, 401, 403]:
-            manager.mark_bad(token)
-            continue
+        res = checkin(token)
 
         state, reason = parse_state(res)
-        name = get_user_name(token)
-
-        if state == "CHECKED":
-            checked += 1
-            state_cn = "已签到"
-
-        elif state == "NOT_CHECKED":
-            state_cn = "未签到"
-
-        else:
-            state_cn = "异常"
-            error += 1
-            failed.append({
-                "name": name,
-                "reason": reason
-            })
 
         results.append({
-            "name": name,
-            "state": state_cn
+            "name": token[:10],
+            "state": state,
+            "reason": reason
         })
 
         time.sleep(random.uniform(1.5, 3.5))
 
-    summary = f"已签到 {checked} | 异常 {error}"
+    # ===== 邮件 =====
+    html = build_email(results)
 
-    if error == 0:
-        title = f"{SITE_NAME}｜全部账号自愈签到成功"
-    else:
-        title = f"{SITE_NAME}｜自愈签到完成（含异常）"
+    title = f"{SITE_NAME}｜{'全部成功' if all(r['state']=='已签到' for r in results) else '部分失败'}"
 
-    html = build_email(results, failed, summary)
     send_email(title, html)
 
-    print(summary)
+    # ===== 可视化数据（核心新增）=====
+    save_dashboard(results)
+
+    print("DONE")
 
 
 if __name__ == "__main__":
