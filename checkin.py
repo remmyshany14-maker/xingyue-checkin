@@ -12,16 +12,12 @@ from email.mime.text import MIMEText
 from email.header import Header
 
 
-# ======================
-# CONFIG
-# ======================
 BASE_URL = "https://c.xingyuexiezuo.com/api/v1"
-
-RAW_TOKENS = os.getenv("SECRET_TOKENS", "")
+SITE_NAME = "星月"
 
 TOKENS = [
     t.strip()
-    for t in re.split(r"[,\n，]+", RAW_TOKENS)
+    for t in re.split(r"[,\n，]+", os.getenv("SECRET_TOKENS", ""))
     if t.strip()
 ]
 
@@ -31,29 +27,31 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 
 
 # ======================
-# TOKEN INFO（中文名 + uid）
+# 解析账号信息（昵称优先）
 # ======================
 def parse_token_info(token):
     try:
-        payload = token.split(".")[1]
-        payload += "=" * (-len(payload) % 4)
+        part = token.split(".")[1]
+        part += "=" * (-len(part) % 4)
 
-        data = base64.urlsafe_b64decode(payload)
-        obj = json.loads(data.decode())
+        obj = json.loads(base64.urlsafe_b64decode(part).decode())
 
         return {
-            "uid": obj.get("uid", "unknown"),
-            "name": obj.get("nickname") or f"UID-{obj.get('uid')}"
+            "uid": obj.get("uid"),
+            "name": obj.get("nickname")
+                    or f"UID-{obj.get('uid')}"
+                    or token[:8]
         }
+
     except:
         return {
-            "uid": "unknown",
-            "name": token[:6]
+            "uid": None,
+            "name": token[:8]
         }
 
 
 # ======================
-# REQUEST
+# request
 # ======================
 def request_post(url, token, payload=None):
     headers = {
@@ -72,9 +70,6 @@ def request_post(url, token, payload=None):
         return {"code": -1, "error": str(e)}
 
 
-# ======================
-# CHECKIN
-# ======================
 def checkin(token):
     return request_post(
         f"{BASE_URL}/forum/checkin",
@@ -84,180 +79,166 @@ def checkin(token):
 
 
 # ======================
-# STATE
+# 状态标准化（核心）
 # ======================
 def parse_state(res):
     if not isinstance(res, dict):
-        return "UNKNOWN"
+        return "ERROR", "响应异常"
 
     if "error" in res:
-        return "NETWORK_ERROR"
+        return "ERROR", res["error"]
 
     code = res.get("code")
-    status = res.get("status", "")
+    status = str(res.get("status", ""))
 
+    # 已签到
     if code == 5150 or "已签到" in status:
-        return "ALREADY"
+        return "CHECKED", None
 
+    # 成功但未签到（少见）
     if code == 200:
-        return "SUCCESS"
+        return "CHECKED", None
 
-    return "FAILED"
+    # 失败
+    return "NOT_CHECKED", status or "未知错误"
 
 
 # ======================
-# EMAIL
+# 邮件发送
 # ======================
 def send_email(title, html):
-    if not (EMAIL_USER and EMAIL_PASS and EMAIL_TO):
-        print("[EMAIL] missing config")
-        return
-
     msg = MIMEText(html, "html", "utf-8")
     msg["Subject"] = Header(title, "utf-8")
     msg["From"] = EMAIL_USER
     msg["To"] = EMAIL_TO
 
-    try:
-        server = smtplib.SMTP_SSL("smtp.qq.com", 465)
-        server.login(EMAIL_USER, EMAIL_PASS)
-        server.sendmail(EMAIL_USER, [EMAIL_TO], msg.as_bytes())
-        server.quit()
-        print("[EMAIL] sent")
-    except Exception as e:
-        print("[EMAIL ERROR]", e)
+    server = smtplib.SMTP_SSL("smtp.qq.com", 465)
+    server.login(EMAIL_USER, EMAIL_PASS)
+    server.sendmail(EMAIL_USER, [EMAIL_TO], msg.as_bytes())
+    server.quit()
 
 
 # ======================
-# CORE ENGINE（终极关键）
+# HTML（重点优化排序）
 # ======================
-def run_checkin_for_token(token, max_retry=3):
-    """
-    ✔ 单 token 直到成功 / 已签到 / 或失败耗尽
-    """
-    for i in range(max_retry):
-        res = checkin(token)
-        state = parse_state(res)
-
-        if state in ["SUCCESS", "ALREADY"]:
-            return res, state
-
-        time.sleep(2 + i)
-
-    return res, "FAILED"
-
-
-# ======================
-# MAIN
-# ======================
-def run():
-    print("===== ULTIMATE CHECKIN START =====")
-
-    results = []
-
-    success = 0
-    already = 0
-    failed = 0
-    network = 0
-
-    token_index = 0
-
-    while token_index < len(TOKENS):
-
-        token = TOKENS[token_index]
-
-        # ✔ 防风控延迟
-        time.sleep(random.uniform(1.5, 4.0))
-
-        res, state = run_checkin_for_token(token)
-
-        info = parse_token_info(token)
-
-        print(info["name"], res)
-
-        # ======================
-        # 状态统计
-        # ======================
-        if state == "SUCCESS":
-            success += 1
-            token_index += 1
-
-        elif state == "ALREADY":
-            already += 1
-            token_index += 1
-
-        elif state == "FAILED":
-            failed += 1
-            token_index += 1  # ❗失败直接换 token
-
-        else:
-            network += 1
-            token_index += 1
-
-        results.append({
-            "name": info["name"],
-            "state": state
-        })
-
-    # ======================
-    # REPORT
-    # ======================
+def build_email(results, failed_list, summary_text):
     html = f"""
     <html>
-    <body style="font-family:Arial">
+    <body style="font-family:Arial;background:#f5f5f5;padding:20px">
 
-    <h2>🚀 签到终极日报</h2>
+    <div style="background:#fff;padding:20px;border-radius:10px">
+
+    <h1>🚀 {SITE_NAME}签到报告</h1>
+    <h2>{summary_text}</h2>
     <p>{datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
 
-    <table border="1" cellpadding="8">
-        <tr><th>账号</th><th>状态</th></tr>
+    <h3>📌 账号状态</h3>
+    <table border="1" cellpadding="8" width="100%">
+        <tr>
+            <th>账号</th>
+            <th>状态</th>
+        </tr>
     """
 
     color_map = {
-        "SUCCESS": "green",
-        "ALREADY": "blue",
-        "FAILED": "red",
-        "NETWORK_ERROR": "orange"
+        "CHECKED": "green",
+        "NOT_CHECKED": "red",
+        "ERROR": "orange"
     }
 
     for r in results:
         html += f"""
         <tr>
             <td>{r['name']}</td>
-            <td style="color:{color_map.get(r['state'],'black')}">{r['state']}</td>
+            <td style="color:{color_map[r['state']]};">
+                {r['state_cn']}
+            </td>
         </tr>
         """
 
-    html += f"""
-    </table>
-
-    <h3>📊 汇总</h3>
-    <p>
-    成功: {success} <br>
-    已签到: {already} <br>
-    失败: {failed} <br>
-    网络异常: {network}
-    </p>
-
-    </body>
-    </html>
-    """
+    html += "</table>"
 
     # ======================
-    # TITLE LOGIC
+    # 失败原因（仅失败才显示）
+    # ======================
+    if failed_list:
+        html += "<h3>⚠️ 失败原因</h3><ul>"
+        for f in failed_list:
+            html += f"<li>{f['name']} → {f['reason']}</li>"
+        html += "</ul>"
+
+    html += "</div></body></html>"
+
+    return html
+
+
+# ======================
+# MAIN
+# ======================
+def run():
+    print("===== START =====")
+
+    results = []
+    failed_list = []
+
+    checked = 0
+    not_checked = 0
+    error = 0
+
+    for token in TOKENS:
+
+        time.sleep(random.uniform(1.5, 3.5))
+
+        res = checkin(token)
+        state, reason = parse_state(res)
+
+        info = parse_token_info(token)
+
+        # 中文状态
+        if state == "CHECKED":
+            state_cn = "已签到"
+            checked += 1
+
+        elif state == "NOT_CHECKED":
+            state_cn = "未签到"
+            not_checked += 1
+
+        else:
+            state_cn = "异常"
+            error += 1
+            failed_list.append({
+                "name": info["name"],
+                "reason": reason
+            })
+
+        results.append({
+            "name": info["name"],
+            "state": state,
+            "state_cn": state_cn
+        })
+
+    # ======================
+    # 汇总（你要求的版本）
     # ======================
     total = len(TOKENS)
 
-    if success == total:
-        title = "✅ 全部签到成功"
-    elif success + already == total:
-        title = "🟡 全部已签到"
-    elif success > 0:
-        title = "🟠 部分成功"
+    summary_text = f"已签到 {checked} | 未签到 {not_checked} | 异常 {error}"
+
+    # ======================
+    # 邮件标题（修复）
+    # ======================
+    if checked == total:
+        title = f"{SITE_NAME}｜全部账号已签到"
+    elif checked + not_checked == total:
+        title = f"{SITE_NAME}｜部分账号未签到"
     else:
-        title = "❌ 签到失败"
+        title = f"{SITE_NAME}｜签到异常"
+
+    html = build_email(results, failed_list, summary_text)
 
     send_email(title, html)
+
+    print(summary_text)
 
 
 if __name__ == "__main__":
