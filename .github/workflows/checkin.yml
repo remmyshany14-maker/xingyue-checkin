@@ -38,3 +38,15 @@ jobs:
 
       - name: Upload dashboard data
         run: echo "dashboard updated"
+
+      - name: Run checkin (with retry)
+        id: checkin
+        continue-on-error: true
+        run: python checkin.py
+
+      - name: Retry if failed
+        if: failure()
+        run: |
+          echo "retrying checkin..."
+          sleep 10
+          python checkin.py
