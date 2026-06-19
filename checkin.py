@@ -1,8 +1,8 @@
 import os
 import time
 import random
-import json
 import re
+import json
 import base64
 import requests
 import smtplib
@@ -18,13 +18,11 @@ from email.header import Header
 # ======================
 BASE_URL = "https://c.xingyuexiezuo.com/api/v1"
 
-
 TOKENS = [
     t.strip()
     for t in re.split(r"[,\n，]+", os.getenv("SECRET_TOKENS", ""))
     if t.strip()
 ]
-
 
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
@@ -32,7 +30,7 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 
 
 # ======================
-# AES decrypt（关键修复）
+# AES 解密
 # ======================
 def decrypt_encoded(encoded: str):
     try:
@@ -48,9 +46,7 @@ def decrypt_encoded(encoded: str):
         decrypted = decrypted[:-pad]
 
         return json.loads(decrypted.decode("utf-8"))
-
-    except Exception as e:
-        print("[DECRYPT ERROR]", e)
+    except Exception:
         return {}
 
 
@@ -83,33 +79,22 @@ def checkin(token):
 
 
 # ======================
-# reward parser（核心修复）
+# reward parse
 # ======================
 def parse_reward(result):
-    data = result.get("data", {})
+    data = result.get("data", {}) or {}
 
     encoded = data.get("encoded")
-
     if encoded:
         decoded = decrypt_encoded(encoded)
         user_info = decoded.get("userInfo", {})
 
-        daily = user_info.get("daily_info", {})
+        today = user_info.get("daily_info", {}).get("daily_free", 0)
         remaining = user_info.get("remaining_words", 0)
-
-        today = daily.get("daily_free", 0)
 
         return today, remaining
 
-    # fallback（防止接口变动）
-    user_info = data.get("userInfo", {}) if isinstance(data, dict) else {}
-
-    daily = user_info.get("daily_info", {})
-    remaining = user_info.get("remaining_words", 0)
-
-    today = daily.get("daily_free", 0)
-
-    return today, remaining
+    return 0, 0
 
 
 # ======================
@@ -130,24 +115,26 @@ def send_email(title, content):
         server.login(EMAIL_USER, EMAIL_PASS)
         server.sendmail(EMAIL_USER, [EMAIL_TO], msg.as_bytes())
         server.quit()
-        print("[EMAIL] sent")
     except Exception as e:
         print("[EMAIL ERROR]", e)
 
 
 # ======================
-# main
+# MAIN
 # ======================
 def run():
     print("===== START CHECKIN =====")
 
     results = []
-
     total_today = 0
     total_remaining = 0
 
     for token in TOKENS:
-        time.sleep(random.uniform(2, 5))
+
+        # ======================
+        # ✔ ② 就是这里（核心）
+        # ======================
+        time.sleep(random.uniform(1.5, 4.5))
 
         result = checkin(token)
         print("CHECKIN:", result)
@@ -195,17 +182,8 @@ def run():
 
     print(report)
 
-    # ======================
-    # email title
-    # ======================
     success = sum(1 for r in results if r["state"] == "SUCCESS")
-
-    if success == len(results):
-        title = "签到全部成功"
-    elif success == 0:
-        title = "签到全部失败"
-    else:
-        title = f"部分成功 {success}/{len(results)}"
+    title = f"签到完成 {success}/{len(results)}"
 
     send_email(title, report)
 
