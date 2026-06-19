@@ -79,10 +79,30 @@ def checkin(token):
 
 
 def status(token):
-    return request_post(
-        f"{BASE_URL}/forum/checkin/status",
-        token
-    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Device": "web",
+        "Platform": "web",
+        "Bundle": "web",
+        "Version": "5.1.0",
+        "Content-Type": "application/json",
+
+        # ✔ 模拟浏览器（关键修复点）
+        "Referer": "https://c.xingyuexiezuo.com/",
+        "Origin": "https://c.xingyuexiezuo.com",
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    try:
+        r = requests.post(
+            f"{BASE_URL}/forum/checkin/status",
+            headers=headers,
+            json={},
+            timeout=15
+        )
+        return r.json()
+    except Exception as e:
+        return {"code": -1, "error": str(e)}
 
 
 # ======================
