@@ -27,27 +27,62 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 
 
 # ======================
-# 解析账号信息（昵称优先）
+# ⭐ 核心升级：真实用户名获取
 # ======================
-def parse_token_info(token):
+def get_user_name(token):
+    """
+    优先：/user/info
+    兜底：JWT
+    最后：token截断
+    """
+
+    # 1️⃣ 优先接口获取真实昵称
+    try:
+        r = requests.get(
+            f"{BASE_URL}/user/info",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Device": "web",
+                "Platform": "web",
+                "Bundle": "web",
+                "Version": "5.1.0",
+            },
+            timeout=10
+        )
+
+        data = r.json()
+        user = data.get("data") or {}
+
+        name = (
+            user.get("nickname")
+            or user.get("username")
+            or user.get("name")
+        )
+
+        if name:
+            return name
+
+    except:
+        pass
+
+    # 2️⃣ JWT fallback
     try:
         part = token.split(".")[1]
         part += "=" * (-len(part) % 4)
 
         obj = json.loads(base64.urlsafe_b64decode(part).decode())
 
-        return {
-            "uid": obj.get("uid"),
-            "name": obj.get("nickname")
-                    or f"UID-{obj.get('uid')}"
-                    or token[:8]
-        }
+        return (
+            obj.get("nickname")
+            or obj.get("name")
+            or f"UID-{obj.get('uid')}"
+        )
 
     except:
-        return {
-            "uid": None,
-            "name": token[:8]
-        }
+        pass
+
+    # 3️⃣ 最终兜底
+    return f"TOKEN-{token[:6]}"
 
 
 # ======================
@@ -79,7 +114,7 @@ def checkin(token):
 
 
 # ======================
-# 状态标准化（核心）
+# 状态标准化
 # ======================
 def parse_state(res):
     if not isinstance(res, dict):
@@ -91,15 +126,12 @@ def parse_state(res):
     code = res.get("code")
     status = str(res.get("status", ""))
 
-    # 已签到
     if code == 5150 or "已签到" in status:
         return "CHECKED", None
 
-    # 成功但未签到（少见）
     if code == 200:
         return "CHECKED", None
 
-    # 失败
     return "NOT_CHECKED", status or "未知错误"
 
 
@@ -119,7 +151,7 @@ def send_email(title, html):
 
 
 # ======================
-# HTML（重点优化排序）
+# HTML
 # ======================
 def build_email(results, failed_list, summary_text):
     html = f"""
@@ -150,17 +182,13 @@ def build_email(results, failed_list, summary_text):
         html += f"""
         <tr>
             <td>{r['name']}</td>
-            <td style="color:{color_map[r['state']]};">
-                {r['state_cn']}
-            </td>
+            <td style="color:{color_map[r['state']]};">{r['state_cn']}</td>
         </tr>
         """
 
     html += "</table>"
 
-    # ======================
-    # 失败原因（仅失败才显示）
-    # ======================
+    # 失败原因
     if failed_list:
         html += "<h3>⚠️ 失败原因</h3><ul>"
         for f in failed_list:
@@ -168,7 +196,6 @@ def build_email(results, failed_list, summary_text):
         html += "</ul>"
 
     html += "</div></body></html>"
-
     return html
 
 
@@ -192,9 +219,9 @@ def run():
         res = checkin(token)
         state, reason = parse_state(res)
 
-        info = parse_token_info(token)
+        # ⭐ 这里改了：不再用旧 parse_token_info
+        name = get_user_name(token)
 
-        # 中文状态
         if state == "CHECKED":
             state_cn = "已签到"
             checked += 1
@@ -207,26 +234,20 @@ def run():
             state_cn = "异常"
             error += 1
             failed_list.append({
-                "name": info["name"],
+                "name": name,
                 "reason": reason
             })
 
         results.append({
-            "name": info["name"],
+            "name": name,
             "state": state,
             "state_cn": state_cn
         })
 
-    # ======================
-    # 汇总（你要求的版本）
-    # ======================
     total = len(TOKENS)
 
     summary_text = f"已签到 {checked} | 未签到 {not_checked} | 异常 {error}"
 
-    # ======================
-    # 邮件标题（修复）
-    # ======================
     if checked == total:
         title = f"{SITE_NAME}｜全部账号已签到"
     elif checked + not_checked == total:
