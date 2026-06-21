@@ -94,10 +94,18 @@ def parse_state(res):
     if "error" in res:
         return "异常", res["error"]
 
-    if res.get("code") == 5150 or "已签到" in str(res.get("status", "")):
+    code = res.get("code")
+    status = str(res.get("status", ""))
+
+    # 已签到情况1（老接口）
+    if code == 5150 or "已签到" in status:
         return "已签到", None
 
-    return "未签到", res.get("status", "未知错误")
+    # 已签到情况2（新接口）
+    if code == 0:
+        return "已签到", None
+
+    return "异常", status
 
 
 # ======================
@@ -188,7 +196,7 @@ def run():
         info = parse_token_info(token)
 
         # 防重复（幂等）
-        if info["uid"] in checked_today:
+        if info["uid"] and info["uid"] in checked_today:
             print(f"[SKIP] {info['name']}")
             continue
         checked_today.add(info["uid"])
