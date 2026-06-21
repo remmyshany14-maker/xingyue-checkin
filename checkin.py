@@ -196,6 +196,10 @@ def run():
         # retry签到
         res, state, reason = retry_checkin(token)
 
+        print("RAW RESPONSE:", res)
+        print("STATE:", state)
+        print("REASON:", reason)
+
         results.append({
             "name": info["name"],
             "state": state,
